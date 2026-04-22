@@ -7,7 +7,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.1",
+    "node-telegram-bot-api": "^0.67.0",
     "dotenv": "^16.4.5"
   },
   "engines": {
