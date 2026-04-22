@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.67.0",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "adm-zip": "^0.5.16"
   },
   "engines": {
     "node": ">=18"
