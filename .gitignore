@@ -1,6 +1,5 @@
-node_modules
-.env
+__pycache__/
+*.pyc
 results/
-temp/
-.DS_Store
-*.log
+.env
+temp_*.txt
