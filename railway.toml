@@ -1,0 +1,11 @@
+[build]
+builder = "NIXPACKS"
+
+[[build.stages]]
+id = "base"
+nixpacks.providers = ["python"]
+
+[deploy]
+startCommand = "python bot.py"
+restartPolicyType = "ON_FAILURE"
+numReplicas = 1
