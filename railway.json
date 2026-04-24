@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ['python311', 'nodejs']  # nodejs for healthchecks only
+
+[phases.build]
+nixPkgs = ['python311', 'gcc']
+cmds = ['pip install --user -r requirements.txt']
+
+[phases.collect-static-files]
+dirs = ['results/']
+
+[staticAssets]
