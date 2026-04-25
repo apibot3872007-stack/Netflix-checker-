@@ -174,10 +174,12 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
 
-    # FINAL SAFE VERSION - No & \~ on one line
+    # SAFEST FILTER - split to avoid any & \~ issue
     text_filter = filters.TEXT
     command_filter = filters.COMMAND
-    combined_filter = text_filter & \~command_filter
+    no_command_filter = \~command_filter
+    combined_filter = text_filter & no_command_filter
+
     application.add_handler(MessageHandler(combined_filter, handle_message))
 
     logger.info("🚀 Netflix Checker Bot started successfully!")
