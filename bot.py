@@ -174,13 +174,10 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
 
-    # SAFEST HANDLER - split with parentheses to avoid any backslash issue
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & \~filters.COMMAND,
-            handle_message
-        )
-    )
+    # FINAL SAFE HANDLER - no continuation character at all
+    text_filter = filters.TEXT
+    command_filter = filters.COMMAND
+    application.add_handler(MessageHandler(text_filter & \~command_filter, handle_message))
 
     logger.info("🚀 Netflix Checker Bot started successfully!")
     application.run_polling(drop_pending_updates=True)
