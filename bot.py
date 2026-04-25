@@ -137,7 +137,7 @@ class NetflixChecker:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Netflix Checker Bot</b>\n\n"
-        "Send email:password (one per line)\n"
+        "Send email:password combos (one per line)\n"
         "Example:\n<code>giorgio_valiente@yahoo.com:giorgiovaliente021</code>",
         parse_mode='HTML'
     )
@@ -161,7 +161,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = await checker.check_account(email, password)
             await update.message.reply_text(result, parse_mode='HTML', disable_web_page_preview=True)
         except:
-            await update.message.reply_text(f"❌ Invalid: {line}")
+            await update.message.reply_text(f"❌ Invalid line: {line}")
 
     await update.message.reply_text("✅ Check completed!", parse_mode='HTML')
 
@@ -173,11 +173,11 @@ def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    
-    # Clean handler - written safely with parentheses
+
+    # FIXED: Safe multi-line handler with proper parentheses (no backslash)
     application.add_handler(
         MessageHandler(
-            filters.TEXT & \~filters.COMMAND, 
+            filters.TEXT & \~filters.COMMAND,
             handle_message
         )
     )
