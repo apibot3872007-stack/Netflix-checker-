@@ -137,7 +137,7 @@ class NetflixChecker:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Netflix Checker Bot</b>\n\n"
-        "Send email:password combos (one per line)\n"
+        "Send email:password (one per line)\n"
         "Example:\n<code>giorgio_valiente@yahoo.com:giorgiovaliente021</code>",
         parse_mode='HTML'
     )
@@ -149,7 +149,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [line.strip() for line in update.message.text.splitlines() if ':' in line.strip()]
 
     if not lines:
-        await update.message.reply_text("❌ Please send email:password")
+        await update.message.reply_text("❌ Please send email:password combos")
         return
 
     checker = NetflixChecker()
@@ -174,9 +174,12 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     
-    # Safest possible handler - no variable, no continuation
+    # Clean handler - written safely with parentheses
     application.add_handler(
-        MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message)
+        MessageHandler(
+            filters.TEXT & \~filters.COMMAND, 
+            handle_message
+        )
     )
 
     logger.info("🚀 Netflix Checker Bot started successfully!")
