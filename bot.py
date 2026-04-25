@@ -173,7 +173,14 @@ def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
+
+    # SAFEST HANDLER - split with parentheses to avoid any backslash issue
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & \~filters.COMMAND,
+            handle_message
+        )
+    )
 
     logger.info("🚀 Netflix Checker Bot started successfully!")
     application.run_polling(drop_pending_updates=True)
