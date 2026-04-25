@@ -137,7 +137,7 @@ class NetflixChecker:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Netflix Checker Bot</b>\n\n"
-        "Send email:password combos (one per line)\n"
+        "Send email:password (one per line)\n"
         "Example:\n<code>giorgio_valiente@yahoo.com:giorgiovaliente021</code>",
         parse_mode='HTML'
     )
@@ -174,7 +174,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
 
-    # FIXED: Safe multi-line handler with proper parentheses (no backslash)
+    # FIXED: Safe multi-line MessageHandler with proper parentheses
     application.add_handler(
         MessageHandler(
             filters.TEXT & \~filters.COMMAND,
