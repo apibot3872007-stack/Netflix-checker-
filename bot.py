@@ -173,8 +173,6 @@ def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-
-    # CLEAN HANDLER - no continuation character
     application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
 
     logger.info("🚀 Netflix Checker Bot started successfully!")
