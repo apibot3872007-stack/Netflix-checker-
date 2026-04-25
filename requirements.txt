@@ -1,4 +1,3 @@
 requests
 fake-useragent
-python-telegram-bot==20.9
-asyncio
+python-telegram-bot==22.7
