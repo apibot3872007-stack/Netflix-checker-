@@ -6,13 +6,7 @@ import logging
 import requests
 from fake_useragent import UserAgent
 from telegram import Update
-from telegram.ext import (
-    Application, 
-    CommandHandler, 
-    MessageHandler, 
-    filters, 
-    ContextTypes
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
@@ -143,7 +137,7 @@ class NetflixChecker:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Netflix Checker Bot</b>\n\n"
-        "Send email:password (one per line)\n"
+        "Send email:password combos (one per line)\n"
         "Example:\n<code>giorgio_valiente@yahoo.com:giorgiovaliente021</code>",
         parse_mode='HTML'
     )
@@ -155,7 +149,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [line.strip() for line in update.message.text.splitlines() if ':' in line.strip()]
 
     if not lines:
-        await update.message.reply_text("❌ Please send valid email:password combos")
+        await update.message.reply_text("❌ Please send email:password")
         return
 
     checker = NetflixChecker()
@@ -173,16 +167,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TOKEN:
-        logger.error("TELEGRAM_TOKEN not set in Railway variables!")
+        logger.error("TELEGRAM_TOKEN not set!")
         return
 
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     
-    # Fixed handler - split properly to avoid any continuation issues
-    message_filter = filters.TEXT & \~filters.COMMAND
-    application.add_handler(MessageHandler(message_filter, handle_message))
+    # Safest possible handler - no variable, no continuation
+    application.add_handler(
+        MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message)
+    )
 
     logger.info("🚀 Netflix Checker Bot started successfully!")
     application.run_polling(drop_pending_updates=True)
